@@ -1,0 +1,202 @@
+---
+title: "week14.Rmd"
+author: "Phoebe Hessen"
+date: "4/21/2020"
+output: pdf_document
+---
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(RMariaDB)
+```
+
+# Data Import and Cleaning
+
+I began by gaining access to the server. 
+
+```{r}
+con <- dbConnect( MariaDB(),
+                  user="rnlander_8960r",
+                  password="rTCo.4vQ2vc-",
+                  host="tntlab.org"
+)
+```
+
+Then, I used the following command to see which databases I have access to and
+the priveleges that I have. 
+
+```{r}
+dbGetQuery(con, "SHOW DATABASES")
+dbGetQuery(con, "SHOW GRANTS")
+```
+
+The databases I have access to are called "information_schema" and
+"rnlander_8960". 
+
+I know that the "information_Schema" database contains meta-data, so I first
+want to explore the "rnlander_8960" database.
+
+```{r}
+dbExecute(con, "USE rnlander_8960")
+dbGetQuery(con, "SHOW TABLES")
+```
+
+There are three tables in the "rnlander_8960" database: demos, responses, and
+socialmedia. I want to see what columns are in each table. 
+
+```{r}
+dbExecute(con, "USE rnlander_8960")
+dbGetQuery(con, "SHOW COLUMNS FROM demos")
+dbGetQuery(con, "SHOW COLUMNS FROM responses")
+dbGetQuery(con, "SHOW COLUMNS FROM socialmedia")
+```
+
+The information that I want to obtain is 4 survey responses, a count of social
+media platforms the participant uses, and the age of the participant. These
+pieces of information appear to be contained in responses (cols 4-7), 
+socialmedia (cols 2-7) and demos (col 2). 
+
+## Tidyverse path
+
+The information that I want to obtain is 4 survey responses, a count of social
+media platforms the participant uses, and the age of the participant. These
+pieces of information appear to be contained in responses (cols 4-7), 
+socialmedia (cols 2-7) and demos (col 2).
+
+```{r}
+dbExecute(con, "USE rnlander_8960")
+demos <- dbGetQuery(con, "SELECT * FROM demos")
+responses <- dbGetQuery(con, "SELECT * FROM responses")
+social_media <- dbGetQuery(con, "SELECT * FROM socialmedia")
+```
+
+Now I have to create a final dataset, which contains the columns that I want
+from each of the three tables. 
+
+```{r}
+tidy_tbl <- responses %>%
+    left_join(social_media, by = c("smu_code" = "code")) %>%
+    left_join(demos, by = c("ident" = "participant_num"))
+```
+
+## SQL Only Path
+
+My next step is to find out how I can match resposnes across these datasets, to 
+join all the information I need into a single table. From the columns names, it 
+seems that "participant_num" from demos and "ident" from responses might be 
+matched across participants. I want to look at them and see if they take similar 
+form. 
+
+```{r}
+dbExecute(con, "USE rnlander_8960")
+dbGetQuery(con, "SELECT participant_num FROM demos LIMIT 10")
+dbGetQuery(con, "SELECT ident FROM responses LIMIT 10")
+```
+
+These variables appear to be in the same format. 
+
+socialmedia doesn't appear to have a participant number, but it does have a 
+"code" column that could be matched to "smu_code" in responses. 
+
+```{r}
+dbExecute(con, "USE rnlander_8960")
+dbGetQuery(con, "SELECT code FROM socialmedia LIMIT 10")
+dbGetQuery(con, "SELECT smu_code FROM responses LIMIT 10")
+```
+
+These variables also appear to be in the same format. 
+
+Now that I have identified the variables that cases are matched on, I can
+select my columns and perform joins to gather my dataset. 
+
+```{r}
+dbExecute(con, "USE rnlander_8960")
+sql_tbl <- dbGetQuery(con, "SELECT * FROM responses
+           LEFT JOIN socialmedia
+            ON smu_code = code
+           LEFT JOIN demos
+            ON ident = participant_num;")
+```
+
+## Final Cleaning
+
+First, I tidied the dataset in a way that allowed me to perform numeric
+operations on the variables that I would need to in later steps. 
+
+```{r}
+tidy_tbl <- tidy_tbl %>%
+    mutate_at(vars(4:7), na_if, "Refused") %>%
+    mutate_at(vars(4:7,14), na_if, "NA") %>%
+    mutate_at(vars(4:7), recode, "Not acceptable at all" = 1, 
+              "Not very acceptable" = 2, 
+              "Somewhat acceptable" = 3, 
+              "Very acceptable" = 4) %>%
+    mutate_at(vars(8:13), recode, "Not selected" = 0, .default = 1) %>%
+    mutate_at(vars(4:13), as.numeric) %>%
+    mutate_at(14, as.factor)
+```
+
+Then, I added a column that held the mean of the privacy questions and a 
+column that held the sum of the binary coded social media questions. 
+
+```{r}
+tidy_tbl$privacy <- rowMeans(tidy_tbl[startsWith(names(tidy_tbl),"rec_")], na.rm = TRUE)
+tidy_tbl$social_media <- rowSums(tidy_tbl[8:13])
+```
+
+Finally, I narrowed my dataset down to only the columns I am interested in 
+for my analysis. I also removed cases where the participant did not have any 
+social media, because there was no privacy data for those participants, making
+analysis of those cases nonsensical. 
+
+```{r}
+tidy_tbl <- select(tidy_tbl, c(age, privacy, social_media))
+tidy_tbl <- tidy_tbl[complete.cases(tidy_tbl), ]
+```
+
+The dataset was now clean and ready for analysis. 
+
+# Analysis
+
+The research question I am interested in is whether there is a relationship
+between number of social media platforms used and acceptance of privacy 
+intrusions, and whether this relationship is moderated by age. To beging, I fit 
+an OLS model predicting privacy based on social_media. 
+
+```{r}
+mod1 <- lm(privacy ~ social_media, tidy_tbl)
+summary(mod1)
+```
+
+The estimate of the coefficient for social media is 0.12, and the p-value is 
+very very small, indicating that there is a significant positive relationship
+between how many social media platforms a person has, and how accepting they 
+are of privacy intrusions. 
+
+Next, I fit two OLS models, both with age and social media as predictors, and
+one including their interaction (the other did not include their interaction). 
+
+```{r}
+mod2 <- lm(privacy ~ social_media + age, tidy_tbl)
+mod3 <- lm(privacy ~ social_media + age + social_media*age, tidy_tbl)
+aov.mod <- anova(mod2, mod3)
+aov.mod
+```
+
+Running an ANOVA on these two models demonstrated that there was not a 
+significant difference in predictive power between the two models. This 
+suggests that the relationship between number of social media platforms used 
+and acceptance of privacy intrusions is not moderated by age. 
+
+
+# Visualization
+
+```{r}
+ggplot(tidy_tbl, aes(x = social_media, y = privacy, color = age)) +
+                    geom_jitter(width = 0.2) + 
+                    geom_smooth(method = "lm", data = tidy_tbl) +
+                    labs(x = "Number of Social Media Platforms", y = "Acceptance of Privacy Intrusions")
+```
+
