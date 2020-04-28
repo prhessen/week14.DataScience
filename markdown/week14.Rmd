@@ -35,8 +35,8 @@ dbGetQuery(con, "SHOW GRANTS")
 The databases I have access to are called "information_schema" and
 "rnlander_8960". 
 
-I know that the "information_Schema" database contains meta-data, so I first
-want to explore the "rnlander_8960" database.
+I know that the "information_Schema" database contains meta-data, so I want to 
+explore the "rnlander_8960" database.
 
 ```{r}
 dbExecute(con, "USE rnlander_8960")
@@ -57,31 +57,6 @@ The information that I want to obtain is 4 survey responses, a count of social
 media platforms the participant uses, and the age of the participant. These
 pieces of information appear to be contained in responses (cols 4-7), 
 socialmedia (cols 2-7) and demos (col 2). 
-
-## Tidyverse path
-
-The information that I want to obtain is 4 survey responses, a count of social
-media platforms the participant uses, and the age of the participant. These
-pieces of information appear to be contained in responses (cols 4-7), 
-socialmedia (cols 2-7) and demos (col 2).
-
-```{r}
-dbExecute(con, "USE rnlander_8960")
-demos <- dbGetQuery(con, "SELECT * FROM demos")
-responses <- dbGetQuery(con, "SELECT * FROM responses")
-social_media <- dbGetQuery(con, "SELECT * FROM socialmedia")
-```
-
-Now I have to create a final dataset, which contains the columns that I want
-from each of the three tables. 
-
-```{r}
-tidy_tbl <- responses %>%
-    left_join(social_media, by = c("smu_code" = "code")) %>%
-    left_join(demos, by = c("ident" = "participant_num"))
-```
-
-## SQL Only Path
 
 My next step is to find out how I can match resposnes across these datasets, to 
 join all the information I need into a single table. From the columns names, it 
@@ -106,7 +81,39 @@ dbGetQuery(con, "SELECT code FROM socialmedia LIMIT 10")
 dbGetQuery(con, "SELECT smu_code FROM responses LIMIT 10")
 ```
 
-These variables also appear to be in the same format. 
+These variables also appear to be in the same format. I now know how I can 
+match information from the three tables. Because responses has both participant
+numbers to match with demos, and social media codes to match with socialmedia, 
+I will join information from those tables into responses. 
+
+## Tidyverse path
+
+Since pieces of the information I am interested in are contained in each of the
+three tables in the database, I will import all three tables.
+
+```{r}
+dbExecute(con, "USE rnlander_8960")
+demos <- dbGetQuery(con, "SELECT * FROM demos")
+responses <- dbGetQuery(con, "SELECT * FROM responses")
+social_media <- dbGetQuery(con, "SELECT * FROM socialmedia")
+```
+
+Now I have to create a final dataset, which contains the columns that I want
+from each of the three tables. I can do this by joining on the previously 
+identified variables.
+
+```{r}
+tidy_tbl <- responses %>%
+    left_join(social_media, by = c("smu_code" = "code")) %>%
+    left_join(demos, by = c("ident" = "participant_num"))
+```
+
+Now I have a tidy dataset that contains all the raw variables I am interested
+in for my analysis. 
+
+## SQL Only Path
+
+To do the same thing in SQL only: 
 
 Now that I have identified the variables that cases are matched on, I can
 select my columns and perform joins to gather my dataset. 
@@ -119,6 +126,8 @@ sql_tbl <- dbGetQuery(con, "SELECT * FROM responses
            LEFT JOIN demos
             ON ident = participant_num;")
 ```
+
+Now I once again have a tidy dataset with all of my raw variables. 
 
 ## Final Cleaning
 
@@ -156,13 +165,13 @@ tidy_tbl <- select(tidy_tbl, c(age, privacy, social_media))
 tidy_tbl <- tidy_tbl[complete.cases(tidy_tbl), ]
 ```
 
-The dataset was now clean and ready for analysis. 
+The dataset is now clean and ready for analysis. 
 
 # Analysis
 
 The research question I am interested in is whether there is a relationship
 between number of social media platforms used and acceptance of privacy 
-intrusions, and whether this relationship is moderated by age. To beging, I fit 
+intrusions, and whether this relationship is moderated by age. To begin, I fit 
 an OLS model predicting privacy based on social_media. 
 
 ```{r}
@@ -171,12 +180,12 @@ summary(mod1)
 ```
 
 The estimate of the coefficient for social media is 0.12, and the p-value is 
-very very small, indicating that there is a significant positive relationship
-between how many social media platforms a person has, and how accepting they 
-are of privacy intrusions. 
+quite small (less than .001), indicating that there is a significant positive 
+relationship between how many social media platforms a person has, and how 
+accepting they are of privacy intrusions. 
 
 Next, I fit two OLS models, both with age and social media as predictors, and
-one including their interaction (the other did not include their interaction). 
+one including their interaction and the other not including their interaction. 
 
 ```{r}
 mod2 <- lm(privacy ~ social_media + age, tidy_tbl)
@@ -185,11 +194,10 @@ aov.mod <- anova(mod2, mod3)
 aov.mod
 ```
 
-Running an ANOVA on these two models demonstrated that there was not a 
+Running an ANOVA on these two models demonstrates that there is not a 
 significant difference in predictive power between the two models. This 
 suggests that the relationship between number of social media platforms used 
 and acceptance of privacy intrusions is not moderated by age. 
-
 
 # Visualization
 
@@ -200,3 +208,6 @@ ggplot(tidy_tbl, aes(x = social_media, y = privacy, color = age)) +
                     labs(x = "Number of Social Media Platforms", y = "Acceptance of Privacy Intrusions")
 ```
 
+This plot further supports the idea that the relationship between social media
+use and acceptance of privacy intrusions is not moderated by age - the slopes
+for the different age categories appear very similar. 
